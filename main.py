@@ -6,35 +6,36 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.types.inline_keyboard import InlineKeyboardMarkup, InlineKeyboardButton
 from config import TG_TOKEN
 from re import fullmatch
 
 
-#
-# class JokeStates(StatesGroup):
-#     class MyState(State):
-#         def set(self):
-#             super(self).set()
-#
-#     WaitingForAnswer = MyState()
-
-
 class ChatStates(StatesGroup):
     class MyState(State):
-        def __init__(self, text=None):
+        def __init__(self, text=None, reply_markup=None):
             self.text = text
+            self.reply_markup = reply_markup
             super().__init__()
 
         async def set(self, message: types.Message = None):
             if self.text is not None and message is not None:
-                await message.answer(self.text)
+                await message.answer(self.text, reply_markup=self.reply_markup)
             await super().set()
+    yes_no_kb = InlineKeyboardMarkup()
+    yes_no_kb.add(
+        InlineKeyboardButton('yes', callback_data='yes'),
+        InlineKeyboardButton('no', callback_data='no')
+    )
+    similar_different_kb = InlineKeyboardMarkup()
+    similar_different_kb.add(InlineKeyboardButton('similar', callback_data='similar'))
+    similar_different_kb.add(InlineKeyboardButton('different', callback_data='different'))
 
     WaitingForAge = MyState('Hi, I can tell you a joke! How old are you? (Write the number)')
-    RandomKind = MyState('Let’s pick a random kind of joke?', )
-    GallowsHumor = MyState('And what about gallows humor?')
+    RandomKind = MyState('Let’s pick a random kind of joke?', yes_no_kb)
+    GallowsHumor = MyState('And what about gallows humor?', yes_no_kb)
     RandomJoke = MyState()
-    OneMoreJoke = MyState('Do you want one more similar joke or maybe something different?')
+    OneMoreJoke = MyState('Do you want one more similar joke or maybe something different?', similar_different_kb)
     # Test = State()
 
 
@@ -51,7 +52,8 @@ def random_joke(data, similar=False):
         data['answers_was'] = []
     with open('qajokes1_1_2.csv', 'r', newline='') as csv_in:
         jokes = csv.DictReader(csv_in)
-        jokes = [joke for joke in jokes if data['min'] <= float(joke['dirt']) <= data['max'] and joke['Answer'] not in data['answers_was']]
+        jokes = [joke for joke in jokes if
+                 data['min'] <= float(joke['dirt']) <= data['max'] and joke['Answer'] not in data['answers_was']]
 
     if similar:
         similar_jokes = {}
@@ -107,44 +109,44 @@ async def input_not_digits_in_state_age(message: types.Message):
     await message.answer("Only digits, please.")
 
 
-@dp.message_handler(state=ChatStates.RandomKind)
-async def random_kind(message: types.Message, state: FSMContext):
+@dp.callback_query_handler(state=ChatStates.RandomKind)
+async def random_kind(query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    text = fullmatch(r'\s*([\s\S]*)\s*', message.text).string
-    if text == 'yes':
+    message = query.message
+    if query.data == 'yes':
         data['min'], data['max'] = 0.0, 1.0
         data = random_joke(data)
         await message.answer(data['question'])
         await ChatStates.RandomJoke.set(message)
-    elif text == 'no':
+    elif query.data == 'no':
         await ChatStates.GallowsHumor.set(message)
-    else:
-        await message.answer('Please write yes or no.')
     await state.update_data(data)
+    await message.edit_reply_markup(None)
+    await query.answer()
 
 
-@dp.message_handler(state=ChatStates.GallowsHumor)
-async def gallows_humor(message: types.Message, state: FSMContext):
+@dp.callback_query_handler(state=ChatStates.GallowsHumor)
+async def gallows_humor(query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    message = query.message
     age = data['age']
-    text = fullmatch(r'\s*([\s\S]*)\s*', message.text).string
-    if text == 'yes' or text == 'no':
-        if 14 <= age <= 17:
-            if text == 'yes':
-                data['min'], data['max'] = 0.0, 0.5
-            elif text == 'no':
-                data['min'], data['max'] = 0.0, 0.25
-        elif age >= 18:
-            if text == 'yes':
-                data['min'], data['max'] = 0.5, 1.0
-            elif text == 'no':
-                data['min'], data['max'] = 0.0, 0.5
-        data = random_joke(data)
-        await message.answer(data['question'])
-        await ChatStates.RandomJoke.set(message)
-    else:
-        await message.answer("Please write yes or no.")
+    answer = query.data
+    if 14 <= age <= 17:
+        if answer == 'yes':
+            data['min'], data['max'] = 0.0, 0.5
+        elif answer == 'no':
+            data['min'], data['max'] = 0.0, 0.25
+    elif age >= 18:
+        if answer == 'yes':
+            data['min'], data['max'] = 0.5, 1.0
+        elif answer == 'no':
+            data['min'], data['max'] = 0.0, 0.5
+    data = random_joke(data)
+    await message.answer(data['question'])
+    await ChatStates.RandomJoke.set(message)
     await state.update_data(data)
+    await message.edit_reply_markup(None)
+    await query.answer()
 
 
 @dp.message_handler(state=ChatStates.RandomJoke)
@@ -166,27 +168,28 @@ async def answer_for_random_joke(message: types.Message, state: FSMContext):
     await ChatStates.OneMoreJoke.set(message)
 
 
-@dp.message_handler(lambda message: 'similar' in message.text, state=ChatStates.OneMoreJoke)
-async def one_more_similar(message: types.Message, state: FSMContext):
+@dp.callback_query_handler(lambda query: 'similar' in query.data, state=ChatStates.OneMoreJoke)
+async def one_more_similar(query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    message = query.message
     data = random_joke(data, similar=True)
     await state.update_data(data)
     await message.answer(data['question'])
     await ChatStates.RandomJoke.set(message)
+    await message.edit_reply_markup(None)
+    await query.answer()
 
 
-@dp.message_handler(lambda message: 'different' in message.text, state=ChatStates.OneMoreJoke)
-async def one_more_different(message: types.Message, state: FSMContext):
+@dp.callback_query_handler(lambda query: 'different' in query.data, state=ChatStates.OneMoreJoke)
+async def one_more_different(query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     data = random_joke(data)
+    message = query.message
     await state.update_data(data)
     await message.answer(data['question'])
     await ChatStates.RandomJoke.set(message)
-
-
-@dp.message_handler(state=ChatStates.OneMoreJoke)
-async def one_more_input_error(message: types.Message):
-    await message.answer('similar or different?')
+    await message.edit_reply_markup(None)
+    await query.answer()
 
 
 @dp.message_handler()
